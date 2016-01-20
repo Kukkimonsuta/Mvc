@@ -250,7 +250,7 @@ namespace Microsoft.AspNet.Mvc.Infrastructure
 
             private static ILibraryManager GetLibraryManager()
             {
-                return PlatformServices.Default.LibraryManager;
+                return DnxPlatformServices.Default.LibraryManager;
             }
         }
     }
