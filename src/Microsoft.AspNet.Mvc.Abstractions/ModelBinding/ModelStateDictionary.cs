@@ -741,7 +741,7 @@ namespace Microsoft.AspNet.Mvc.ModelBinding
             if (_index != null)
                 return;
 
-            _index = new Dictionary<string, Dictionary<string, ModelStateEntry>>();
+            _index = new Dictionary<string, Dictionary<string, ModelStateEntry>>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var pair in _innerDictionary)
             {
@@ -755,7 +755,7 @@ namespace Microsoft.AspNet.Mvc.ModelBinding
             {
                 Dictionary<string, ModelStateEntry> dictionary;
                 if (!_index.TryGetValue(indexKey, out dictionary))
-                    dictionary = _index[indexKey] = new Dictionary<string, ModelStateEntry>();
+                    dictionary = _index[indexKey] = new Dictionary<string, ModelStateEntry>(StringComparer.OrdinalIgnoreCase);
 
                 dictionary[key] = value;
             }
