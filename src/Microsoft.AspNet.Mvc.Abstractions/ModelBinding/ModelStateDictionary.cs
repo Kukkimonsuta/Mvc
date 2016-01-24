@@ -20,8 +20,15 @@ namespace Microsoft.AspNet.Mvc.ModelBinding
         /// </summary>
         public static readonly int DefaultMaxAllowedErrors = 200;
 
+        /// <summary>
+        /// The default value for <see cref="IndexThreshold"/> of <c>1000</c>
+        /// </summary>
+        public static readonly int DefaultIndexThreshold = 1000;
+
         private readonly Dictionary<string, ModelStateEntry> _innerDictionary;
+        private Dictionary<string, Dictionary<string, ModelStateEntry>> _index;
         private int _maxAllowedErrors;
+        private int _indexThreshold = DefaultIndexThreshold;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ModelStateDictionary"/> class.
@@ -60,6 +67,7 @@ namespace Microsoft.AspNet.Mvc.ModelBinding
             MaxAllowedErrors = dictionary.MaxAllowedErrors;
             ErrorCount = dictionary.ErrorCount;
             HasRecordedMaxModelError = dictionary.HasRecordedMaxModelError;
+            IndexThreshold = dictionary.IndexThreshold;
         }
 
         /// <summary>
@@ -113,6 +121,27 @@ namespace Microsoft.AspNet.Mvc.ModelBinding
         /// <see cref="AddModelError"/> or <see cref="TryAddModelError"/>.
         /// </summary>
         public int ErrorCount { get; private set; }
+
+        /// <summary>
+        /// Gets or sets the value at which this instance of <see cref="ModelStateDictionary"/> starts indexing its values.
+        /// Defaults to <c>1000</c>.
+        /// </summary>
+        public int IndexThreshold
+        {
+            get
+            {
+                return _indexThreshold;
+            }
+            set
+            {
+                if (value < 0)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(value));
+                }
+
+                _indexThreshold = value;
+            }
+        }
 
         /// <inheritdoc />
         public int Count
@@ -184,7 +213,13 @@ namespace Microsoft.AspNet.Mvc.ModelBinding
                 {
                     throw new ArgumentNullException(nameof(value));
                 }
+
                 _innerDictionary[key] = value;
+
+                if (_index != null)
+                {
+                    IndexPair(key, value);
+                }
             }
         }
 
@@ -530,7 +565,7 @@ namespace Microsoft.AspNet.Mvc.ModelBinding
             return entry;
         }
 
-        private static ModelValidationState GetValidity(PrefixEnumerable entries, ModelValidationState defaultState)
+        private static ModelValidationState GetValidity(IEnumerable<KeyValuePair<string, ModelStateEntry>> entries, ModelValidationState defaultState)
         {
 
             var hasEntries = false;
@@ -593,12 +628,19 @@ namespace Microsoft.AspNet.Mvc.ModelBinding
             }
 
             _innerDictionary.Add(key, value);
+
+            if (_index != null)
+            {
+                IndexPair(key, value);
+            }
         }
 
         /// <inheritdoc />
         public void Clear()
         {
             _innerDictionary.Clear();
+            if (_index != null)
+                _index = null;
         }
 
         /// <inheritdoc />
@@ -632,7 +674,14 @@ namespace Microsoft.AspNet.Mvc.ModelBinding
         /// <inheritdoc />
         public bool Remove(KeyValuePair<string, ModelStateEntry> item)
         {
-            return ((ICollection<KeyValuePair<string, ModelStateEntry>>)_innerDictionary).Remove(item);
+            var result = ((ICollection<KeyValuePair<string, ModelStateEntry>>)_innerDictionary).Remove(item);
+
+            if (_index != null)
+            {
+                UnindexPair(item.Key, item.Value);
+            }
+
+            return result;
         }
 
         /// <inheritdoc />
@@ -643,7 +692,14 @@ namespace Microsoft.AspNet.Mvc.ModelBinding
                 throw new ArgumentNullException(nameof(key));
             }
 
-            return _innerDictionary.Remove(key);
+            var result = _innerDictionary.Remove(key);
+
+            if (_index != null)
+            {
+                UnindexPair(key);
+            }
+
+            return result;
         }
 
         /// <inheritdoc />
@@ -667,6 +723,66 @@ namespace Microsoft.AspNet.Mvc.ModelBinding
         IEnumerator IEnumerable.GetEnumerator()
         {
             return GetEnumerator();
+        }
+
+        private static char[] IndexSplitChars = { '.', '[' };
+
+        private static IEnumerable<string> GetIndexKeys(string key)
+        {
+            var index = -1;
+            while ((index = key.IndexOfAny(IndexSplitChars, index + 1)) != -1)
+            {
+                yield return key.Substring(0, index);
+            }
+        }
+
+        private void BuildIndex()
+        {
+            if (_index != null)
+                return;
+
+            _index = new Dictionary<string, Dictionary<string, ModelStateEntry>>();
+
+            foreach (var pair in _innerDictionary)
+            {
+                IndexPair(pair.Key, pair.Value);
+            }
+        }
+
+        private void IndexPair(string key, ModelStateEntry value)
+        {
+            foreach (var indexKey in GetIndexKeys(key))
+            {
+                Dictionary<string, ModelStateEntry> dictionary;
+                if (!_index.TryGetValue(indexKey, out dictionary))
+                    dictionary = _index[indexKey] = new Dictionary<string, ModelStateEntry>();
+
+                dictionary[key] = value;
+            }
+        }
+
+        private void UnindexPair(string key, ModelStateEntry value = null)
+        {
+            foreach (var indexKey in GetIndexKeys(key))
+            {
+                Dictionary<string, ModelStateEntry> dictionary;
+                if (!_index.TryGetValue(indexKey, out dictionary))
+                    continue;
+
+                if (value == null)
+                {
+                    dictionary.Remove(key);
+                }
+                else
+                {
+                    ModelStateEntry currentValue;
+                    if (dictionary.TryGetValue(key, out currentValue) && currentValue == value)
+                        dictionary.Remove(key);
+                }
+
+                if (dictionary.Count <= 0)
+                    _index.Remove(indexKey);
+            }
         }
 
         public static bool StartsWithPrefix(string prefix, string key)
@@ -734,11 +850,27 @@ namespace Microsoft.AspNet.Mvc.ModelBinding
             return false;
         }
 
-        public PrefixEnumerable FindKeysWithPrefix(string prefix)
+        public IEnumerable<KeyValuePair<string, ModelStateEntry>> FindKeysWithPrefix(string prefix)
         {
             if (prefix == null)
             {
                 throw new ArgumentNullException(nameof(prefix));
+            }
+
+            // on many items PrefixEnumerator is extremely slow, build an index
+            // if the threshold has been exceeded
+            if (_index == null && _innerDictionary.Count >= IndexThreshold)
+            {
+                BuildIndex();
+            }
+
+            // attempt to use index if possible, otherwise use default behavior
+            if (_index != null)
+            {
+                Dictionary<string, ModelStateEntry> _dictionary;
+
+                if (_index.TryGetValue(prefix, out _dictionary))
+                    return _dictionary;
             }
 
             return new PrefixEnumerable(this, prefix);
