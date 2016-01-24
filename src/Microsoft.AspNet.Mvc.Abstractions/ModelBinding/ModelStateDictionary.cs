@@ -5,6 +5,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using Microsoft.AspNet.Mvc.Abstractions;
+using System.Linq;
 
 namespace Microsoft.AspNet.Mvc.ModelBinding
 {
@@ -734,6 +735,7 @@ namespace Microsoft.AspNet.Mvc.ModelBinding
             {
                 yield return key.Substring(0, index);
             }
+            yield return key;
         }
 
         private void BuildIndex()
@@ -864,13 +866,15 @@ namespace Microsoft.AspNet.Mvc.ModelBinding
                 BuildIndex();
             }
 
-            // attempt to use index if possible, otherwise use default behavior
+            // use index if available
             if (_index != null)
             {
                 Dictionary<string, ModelStateEntry> _dictionary;
 
                 if (_index.TryGetValue(prefix, out _dictionary))
                     return _dictionary;
+
+                return Enumerable.Empty<KeyValuePair<string, ModelStateEntry>>();
             }
 
             return new PrefixEnumerable(this, prefix);
